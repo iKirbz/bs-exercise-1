@@ -1,3 +1,6 @@
+# Program: Feedback Arc Set
+# Author: Anton Prem, 12522014
+
 CC = gcc
 DEFS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_SVID_SOURCE \
        -D_POSIX_C_SOURCE=200809L
@@ -20,7 +23,7 @@ supervisor: supervisor.o
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-generator.o: generator.c generator.h
+generator.o: generator.c generator.h shared_buffer.h
 supervisor.o: supervisor.c shared_buffer.h generator.h
 
 clean:

@@ -1,8 +1,8 @@
 /**
  * @file generator.c
- * @brief generates feedback arc set for a directed graph
- * @details parses graph edges from cli arguments, shuffles the
- *          vertices, and selects edges that point backward
+ * @brief generate feedback arc sets for directed graph
+ * @details parse edges shuffle vertices find backward edges and write solutions
+ *          to shared circular buffer
  * @author Anton Prem, 12522014
  * @date 2026-10-27
  */
@@ -22,9 +22,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define INITIAL_VERTEX_CAPACITY 1
-#define INITIAL_EDGE_CAPACITY 1
-#define INITIAL_FAS_EDGE_CAPACITY 1
+#define INITIAL_VERTEX_CAPACITY 8
+#define INITIAL_EDGE_CAPACITY 8
+#define INITIAL_FAS_EDGE_CAPACITY 8
 
 typedef struct {
   int *data;
@@ -58,6 +58,13 @@ static bool add_edge(EdgeArray *edges, Edge edge);
 static void shuffle(VertexArray *vertices);
 
 static bool calculate_fas(const Graph *graph, EdgeArray *fas_edges);
+
+typedef enum { WRITE_SUCCESS, WRITE_STOP_REQUESTED, WRITE_FAILURE } WriteResult;
+
+static WriteResult write_solution(const char *program,
+                                  SharedBuffer *shared_buffer, sem_t *sem_mutex,
+                                  sem_t *sem_free, sem_t *sem_used,
+                                  const Solution *solution);
 
 /** @brief build the graph and generate feedback arc sets
  * @param argc number of command-line arguments
@@ -170,53 +177,13 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < s.count; i++) {
       s.edges[i] = fas_edges.data[i];
     }
-    if (sem_wait(sem_free) == -1) {
-      fprintf(stderr, "%s: sem_wait free slots: %s\n", argv[0],
-              strerror(errno));
+    WriteResult write_result = write_solution(argv[0], shared_buffer, sem_mutex,
+                                              sem_free, sem_used, &s);
+    if (write_result == WRITE_FAILURE) {
       goto cleanup;
     }
-
-    if (sem_wait(sem_mutex) == -1) {
-      fprintf(stderr, "%s: sem_wait mutex: %s\n", argv[0], strerror(errno));
-      if (sem_post(sem_free) == -1) {
-        fprintf(stderr,
-                "%s: sem_post free slots after mutex wait failure: %s\n",
-                argv[0], strerror(errno));
-      }
-      goto cleanup;
-    }
-
-    if (shared_buffer->stop) {
-      if (sem_post(sem_mutex) == -1) {
-        fprintf(stderr, "%s: sem_post mutex after stop check: %s\n", argv[0],
-                strerror(errno));
-        if (sem_post(sem_free) == -1) {
-          fprintf(stderr, "%s: sem_post free slots after stop check: %s\n",
-                  argv[0], strerror(errno));
-        }
-        goto cleanup;
-      }
-      if (sem_post(sem_free) == -1) {
-        fprintf(stderr, "%s: sem_post free slots after stop check: %s\n",
-                argv[0], strerror(errno));
-        goto cleanup;
-      }
+    if (write_result == WRITE_STOP_REQUESTED) {
       break;
-    }
-
-    shared_buffer->slots[shared_buffer->write_pos] = s;
-    shared_buffer->write_pos =
-        (shared_buffer->write_pos + 1) % BUFFER_SOLUTION_CAPACITY;
-
-    if (sem_post(sem_mutex) == -1) {
-      fprintf(stderr, "%s: sem_post mutex: %s\n", argv[0], strerror(errno));
-      goto cleanup;
-    }
-
-    if (sem_post(sem_used) == -1) {
-      fprintf(stderr, "%s: sem_post used slots: %s\n", argv[0],
-              strerror(errno));
-      goto cleanup;
     }
   }
 
@@ -252,7 +219,67 @@ cleanup:
   return result;
 }
 
-/** @brief read edge arguments and build the graph
+/** @brief write one solution to shared buffer
+ * @param program program name for error message
+ * @param shared_buffer shared circular buffer
+ * @param sem_mutex semaphore for buffer index and slots
+ * @param sem_free semaphore with free slots
+ * @param sem_used semaphore with used slots
+ * @param solution solution to write
+ * @return success stop requested or failure
+ */
+static WriteResult write_solution(const char *program,
+                                  SharedBuffer *shared_buffer, sem_t *sem_mutex,
+                                  sem_t *sem_free, sem_t *sem_used,
+                                  const Solution *solution) {
+  if (sem_wait(sem_free) == -1) {
+    fprintf(stderr, "%s: sem_wait free slots: %s\n", program, strerror(errno));
+    return WRITE_FAILURE;
+  }
+
+  if (sem_wait(sem_mutex) == -1) {
+    fprintf(stderr, "%s: sem_wait mutex: %s\n", program, strerror(errno));
+    if (sem_post(sem_free) == -1) {
+      fprintf(stderr, "%s: sem_post free slots after mutex wait failure: %s\n",
+              program, strerror(errno));
+    }
+    return WRITE_FAILURE;
+  }
+
+  if (shared_buffer->stop) {
+    if (sem_post(sem_mutex) == -1) {
+      fprintf(stderr, "%s: sem_post mutex after stop check: %s\n", program,
+              strerror(errno));
+      if (sem_post(sem_free) == -1) {
+        fprintf(stderr, "%s: sem_post free slots after stop check: %s\n",
+                program, strerror(errno));
+      }
+      return WRITE_FAILURE;
+    }
+    if (sem_post(sem_free) == -1) {
+      fprintf(stderr, "%s: sem_post free slots after stop check: %s\n", program,
+              strerror(errno));
+      return WRITE_FAILURE;
+    }
+    return WRITE_STOP_REQUESTED;
+  }
+
+  shared_buffer->slots[shared_buffer->write_pos] = *solution;
+  shared_buffer->write_pos =
+      (shared_buffer->write_pos + 1) % BUFFER_SOLUTION_CAPACITY;
+
+  if (sem_post(sem_mutex) == -1) {
+    fprintf(stderr, "%s: sem_post mutex: %s\n", program, strerror(errno));
+    return WRITE_FAILURE;
+  }
+  if (sem_post(sem_used) == -1) {
+    fprintf(stderr, "%s: sem_post used slots: %s\n", program, strerror(errno));
+    return WRITE_FAILURE;
+  }
+  return WRITE_SUCCESS;
+}
+
+/** @brief read edge arguments and build graph
  * @param argc number of command-line arguments
  * @param argv the command-line arguments
  * @param graph gets the vertices and edges

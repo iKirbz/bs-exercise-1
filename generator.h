@@ -1,8 +1,7 @@
 /**
  * @file generator.h
- * @brief generates feedback arc set for a directed graph
- * @details parses graph edges from cli arguments, shuffles the
- *          vertices, and selects edges that point backward
+ * @brief data types for feedback arc set solutions
+ * @details define edges and solution size used by generator and supervisor
  * @author Anton Prem, 12522014
  * @date 2026-10-27
  */

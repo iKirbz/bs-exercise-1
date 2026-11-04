@@ -1,3 +1,10 @@
+/** @file shared_buffer.h
+ * @brief shared buffer for generator and supervisor
+ * @details hold solutions and positions for circular buffer
+ * @author Anton Prem 12522014
+ * @date 2026-10-27
+ */
+
 #ifndef SHARED_BUFFER_H
 #define SHARED_BUFFER_H
 

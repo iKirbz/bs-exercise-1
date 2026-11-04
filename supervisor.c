@@ -1,3 +1,11 @@
+/**
+ * @file supervisor.c
+ * @brief supervise generators and keep best feedback arc set
+ * @details create shared resources read solutions and stop generators
+ * @author Anton Prem, 12522014
+ * @date 2026-10-27
+ */
+
 #include "shared_buffer.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -9,6 +17,15 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+
+static bool read_solution(const char *program, SharedBuffer *shared_buffer,
+                          sem_t *sem_mutex, sem_t *sem_free, sem_t *sem_used,
+                          Solution *solution);
+
+static bool request_stop(const char *program, SharedBuffer *shared_buffer,
+                         sem_t *sem_mutex);
+
+static void print_solution(const Solution *solution);
 
 int main(int argc, char **argv) {
   int result = EXIT_FAILURE;
@@ -26,7 +43,7 @@ int main(int argc, char **argv) {
   char *o_arg = NULL;
   char *n_arg = NULL;
   char *w_arg = NULL;
-  long delay = 0; // seconds
+  long delay = 0; // delay in seconds
 
   int c;
 
@@ -136,67 +153,27 @@ int main(int argc, char **argv) {
   /*******************************************
    *  ready for work
    ***********************************************/
-  Solution best = {{}, SIZE_MAX};
+  Solution best = {.count = SIZE_MAX};
 
   while (true) {
 
     if (best.count == 0) {
-      if (sem_wait(sem_mutex) == -1) {
-        fprintf(stderr, "%s: sem_wait mutex while setting stop flag: %s\n",
-                argv[0], strerror(errno));
-        goto cleanup;
-      }
-      shared_buffer->stop = true;
-      if (sem_post(sem_mutex) == -1) {
-        fprintf(stderr, "%s: sem_post mutex after setting stop flag: %s\n",
-                argv[0], strerror(errno));
+      if (!request_stop(argv[0], shared_buffer, sem_mutex)) {
         goto cleanup;
       }
       printf("The graph is acyclic!\n");
       break;
     }
 
-    if (sem_wait(sem_used) == -1) {
-      fprintf(stderr, "%s: sem_wait used slots: %s\n", argv[0],
-              strerror(errno));
+    Solution temp = {0};
+    if (!read_solution(argv[0], shared_buffer, sem_mutex, sem_free, sem_used,
+                       &temp)) {
       goto cleanup;
     }
-
-    if (sem_wait(sem_mutex) == -1) {
-      fprintf(stderr, "%s: sem_wait mutex: %s\n", argv[0], strerror(errno));
-      if (sem_post(sem_used) == -1) {
-        fprintf(stderr,
-                "%s: sem_post used slots after mutex wait failure: %s\n",
-                argv[0], strerror(errno));
-      }
-      goto cleanup;
-    }
-
-    Solution temp = shared_buffer->slots[shared_buffer->read_pos];
-
-    shared_buffer->read_pos =
-        (shared_buffer->read_pos + 1) % BUFFER_SOLUTION_CAPACITY;
 
     if (temp.count < best.count) {
       best = temp;
-
-      fprintf(stderr, "Solution with %zu edges:", best.count);
-
-      for (size_t i = 0; i < best.count; i++) {
-        fprintf(stderr, " %d-%d", best.edges[i].from, best.edges[i].to);
-      }
-      fprintf(stderr, "\n");
-    }
-
-    if (sem_post(sem_mutex) == -1) {
-      fprintf(stderr, "%s: sem_post mutex: %s\n", argv[0], strerror(errno));
-      goto cleanup;
-    }
-
-    if (sem_post(sem_free) == -1) {
-      fprintf(stderr, "%s: sem_post free slots: %s\n", argv[0],
-              strerror(errno));
-      goto cleanup;
+      print_solution(&best);
     }
   }
 
@@ -251,4 +228,77 @@ cleanup:
     result = EXIT_FAILURE;
   }
   return result;
+}
+
+/** @brief read next solution from shared buffer
+ * @param program program name for error message
+ * @param shared_buffer shared circular buffer
+ * @param sem_mutex semaphore for buffer index and slots
+ * @param sem_free semaphore with free slots
+ * @param sem_used semaphore with used slots
+ * @param solution gets solution from buffer
+ * @return true when a solution was read otherwise false
+ */
+static bool read_solution(const char *program, SharedBuffer *shared_buffer,
+                          sem_t *sem_mutex, sem_t *sem_free, sem_t *sem_used,
+                          Solution *solution) {
+  if (sem_wait(sem_used) == -1) {
+    fprintf(stderr, "%s: sem_wait used slots: %s\n", program, strerror(errno));
+    return false;
+  }
+  if (sem_wait(sem_mutex) == -1) {
+    fprintf(stderr, "%s: sem_wait mutex: %s\n", program, strerror(errno));
+    if (sem_post(sem_used) == -1) {
+      fprintf(stderr, "%s: sem_post used slots after mutex wait failure: %s\n",
+              program, strerror(errno));
+    }
+    return false;
+  }
+
+  *solution = shared_buffer->slots[shared_buffer->read_pos];
+  shared_buffer->read_pos =
+      (shared_buffer->read_pos + 1) % BUFFER_SOLUTION_CAPACITY;
+
+  if (sem_post(sem_mutex) == -1) {
+    fprintf(stderr, "%s: sem_post mutex: %s\n", program, strerror(errno));
+    return false;
+  }
+  if (sem_post(sem_free) == -1) {
+    fprintf(stderr, "%s: sem_post free slots: %s\n", program, strerror(errno));
+    return false;
+  }
+  return true;
+}
+
+/** @brief set stop flag while holding mutex
+ * @param program program name for error message
+ * @param shared_buffer shared circular buffer
+ * @param sem_mutex semaphore for shared buffer
+ * @return true when stop flag was set otherwise false
+ */
+static bool request_stop(const char *program, SharedBuffer *shared_buffer,
+                         sem_t *sem_mutex) {
+  if (sem_wait(sem_mutex) == -1) {
+    fprintf(stderr, "%s: sem_wait mutex while setting stop flag: %s\n", program,
+            strerror(errno));
+    return false;
+  }
+  shared_buffer->stop = true;
+  if (sem_post(sem_mutex) == -1) {
+    fprintf(stderr, "%s: sem_post mutex after setting stop flag: %s\n", program,
+            strerror(errno));
+    return false;
+  }
+  return true;
+}
+
+/** @brief print feedback arc set in assignment format
+ * @param solution solution to print
+ */
+static void print_solution(const Solution *solution) {
+  fprintf(stderr, "Solution with %zu edges:", solution->count);
+  for (size_t i = 0; i < solution->count; i++) {
+    fprintf(stderr, " %d-%d", solution->edges[i].from, solution->edges[i].to);
+  }
+  fprintf(stderr, "\n");
 }
