@@ -15,7 +15,8 @@ BufferReadResult shared_buffer_read(const char *program, SharedBuffer *buffer,
                                     sem_t *mutex, sem_t *free_slots,
                                     sem_t *used_slots, Solution *solution) {
   if (sem_wait(used_slots) == -1) {
-    if (errno == EINTR) return BUFFER_READ_INTERRUPTED;
+    if (errno == EINTR)
+      return BUFFER_READ_INTERRUPTED;
     fprintf(stderr, "%s: sem_wait used slots: %s\n", program, strerror(errno));
     return BUFFER_READ_ERROR;
   }
@@ -23,7 +24,8 @@ BufferReadResult shared_buffer_read(const char *program, SharedBuffer *buffer,
     bool interrupted = errno == EINTR;
     if (interrupted) {
       if (sem_post(used_slots) == -1) {
-        fprintf(stderr, "%s: sem_post used slots after interrupted mutex wait: %s\n",
+        fprintf(stderr,
+                "%s: sem_post used slots after interrupted mutex wait: %s\n",
                 program, strerror(errno));
         return BUFFER_READ_ERROR;
       }

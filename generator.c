@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <semaphore.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -59,6 +60,16 @@ static void shuffle(VertexArray *vertices);
 
 static bool calculate_fas(const Graph *graph, EdgeArray *fas_edges);
 
+static volatile sig_atomic_t generator_stop_requested = 0;
+
+/** @brief set stop flag when a signal arrives
+ * @param signal_number received signal number
+ */
+static void handle_generator_signal(int signal_number) {
+  (void)signal_number;
+  generator_stop_requested = 1;
+}
+
 /** @brief build the graph and generate feedback arc sets
  * @param argc number of command-line arguments
  * @param argv the command-line arguments
@@ -77,6 +88,16 @@ int main(int argc, char **argv) {
       {NULL, 0, INITIAL_EDGE_CAPACITY},
   };
   EdgeArray fas_edges = {NULL, 0, INITIAL_FAS_EDGE_CAPACITY};
+
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = handle_generator_signal;
+  sigemptyset(&sa.sa_mask);
+  if (sigaction(SIGINT, &sa, NULL) == -1 ||
+      sigaction(SIGTERM, &sa, NULL) == -1) {
+    fprintf(stderr, "%s: sigaction: %s\n", argv[0], strerror(errno));
+    goto cleanup;
+  }
 
   /* parse arguments and build the graph */
   if (!build_graph_from_args(argc, argv, &graph)) {
@@ -137,9 +158,9 @@ int main(int argc, char **argv) {
    *  ready for work
    ***********************************************/
 
-  srand((unsigned)time(NULL));
+  srand((unsigned)time(NULL) ^ (unsigned)getpid());
 
-  while (true) {
+  while (!generator_stop_requested) {
 
     shuffle(&graph.vertices);
 
@@ -173,6 +194,9 @@ int main(int argc, char **argv) {
     BufferOperationResult write_result = shared_buffer_write(
         argv[0], shared_buffer, sem_mutex, sem_free, sem_used, &s);
     if (write_result == BUFFER_OPERATION_ERROR) {
+      if (generator_stop_requested) {
+        break;
+      }
       goto cleanup;
     }
     if (write_result == BUFFER_STOP_REQUESTED) {
