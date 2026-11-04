@@ -213,11 +213,15 @@ int main(int argc, char **argv) {
 
   while (!stop_requested && !graph_acyclic) {
     Solution temp = {0};
-    if (!shared_buffer_read(argv[0], shared_buffer, sem_mutex, sem_free,
-                            sem_used, &temp)) {
+    BufferReadResult read_result = shared_buffer_read(
+        argv[0], shared_buffer, sem_mutex, sem_free, sem_used, &temp);
+    if (read_result == BUFFER_READ_INTERRUPTED) {
       if (stop_requested) {
         break;
       }
+      continue;
+    }
+    if (read_result == BUFFER_READ_ERROR) {
       goto cleanup;
     }
     solutions_read++;

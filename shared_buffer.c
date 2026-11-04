@@ -11,33 +11,41 @@
 #include <stdio.h>
 #include <string.h>
 
-bool shared_buffer_read(const char *program, SharedBuffer *buffer, sem_t *mutex,
-                        sem_t *free_slots, sem_t *used_slots,
-                        Solution *solution) {
+BufferReadResult shared_buffer_read(const char *program, SharedBuffer *buffer,
+                                    sem_t *mutex, sem_t *free_slots,
+                                    sem_t *used_slots, Solution *solution) {
   if (sem_wait(used_slots) == -1) {
-    if (errno == EINTR)
-      return false;
+    if (errno == EINTR) return BUFFER_READ_INTERRUPTED;
     fprintf(stderr, "%s: sem_wait used slots: %s\n", program, strerror(errno));
-    return false;
+    return BUFFER_READ_ERROR;
   }
   if (sem_wait(mutex) == -1) {
+    bool interrupted = errno == EINTR;
+    if (interrupted) {
+      if (sem_post(used_slots) == -1) {
+        fprintf(stderr, "%s: sem_post used slots after interrupted mutex wait: %s\n",
+                program, strerror(errno));
+        return BUFFER_READ_ERROR;
+      }
+      return BUFFER_READ_INTERRUPTED;
+    }
     fprintf(stderr, "%s: sem_wait mutex: %s\n", program, strerror(errno));
     if (sem_post(used_slots) == -1)
       fprintf(stderr, "%s: sem_post used slots: %s\n", program,
               strerror(errno));
-    return false;
+    return BUFFER_READ_ERROR;
   }
   *solution = buffer->slots[buffer->read_pos];
   buffer->read_pos = (buffer->read_pos + 1) % BUFFER_SOLUTION_CAPACITY;
   if (sem_post(mutex) == -1) {
     fprintf(stderr, "%s: sem_post mutex: %s\n", program, strerror(errno));
-    return false;
+    return BUFFER_READ_ERROR;
   }
   if (sem_post(free_slots) == -1) {
     fprintf(stderr, "%s: sem_post free slots: %s\n", program, strerror(errno));
-    return false;
+    return BUFFER_READ_ERROR;
   }
-  return true;
+  return BUFFER_READ_SUCCESS;
 }
 
 BufferOperationResult shared_buffer_write(const char *program,

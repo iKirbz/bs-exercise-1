@@ -25,6 +25,12 @@ typedef enum {
   BUFFER_OPERATION_ERROR
 } BufferOperationResult;
 
+typedef enum {
+  BUFFER_READ_SUCCESS,
+  BUFFER_READ_INTERRUPTED,
+  BUFFER_READ_ERROR
+} BufferReadResult;
+
 typedef struct {
   size_t read_pos;
   size_t write_pos;
@@ -39,11 +45,11 @@ typedef struct {
  * @param free_slots semaphore counting free slots
  * @param used_slots semaphore counting used slots
  * @param solution receives the read solution
- * @return true when a solution was read otherwise false
+ * @return success interruption or error
  */
-bool shared_buffer_read(const char *program, SharedBuffer *buffer, sem_t *mutex,
-                        sem_t *free_slots, sem_t *used_slots,
-                        Solution *solution);
+BufferReadResult shared_buffer_read(const char *program, SharedBuffer *buffer,
+                                    sem_t *mutex, sem_t *free_slots,
+                                    sem_t *used_slots, Solution *solution);
 
 /** @brief write one solution to the circular buffer
  * @param program program name for error message
