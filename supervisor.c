@@ -152,19 +152,21 @@ int main(int argc, char **argv) {
                 argv[0], strerror(errno));
         goto cleanup;
       }
-      printf("graph is acyclic");
+      printf("The graph is acyclic!\n");
       break;
     }
 
     if (sem_wait(sem_used) == -1) {
-      fprintf(stderr, "%s: sem_wait used slots: %s\n", argv[0], strerror(errno));
+      fprintf(stderr, "%s: sem_wait used slots: %s\n", argv[0],
+              strerror(errno));
       goto cleanup;
     }
 
     if (sem_wait(sem_mutex) == -1) {
       fprintf(stderr, "%s: sem_wait mutex: %s\n", argv[0], strerror(errno));
       if (sem_post(sem_used) == -1) {
-        fprintf(stderr, "%s: sem_post used slots after mutex wait failure: %s\n",
+        fprintf(stderr,
+                "%s: sem_post used slots after mutex wait failure: %s\n",
                 argv[0], strerror(errno));
       }
       goto cleanup;
@@ -177,6 +179,13 @@ int main(int argc, char **argv) {
 
     if (temp.count < best.count) {
       best = temp;
+
+      fprintf(stderr, "Solution with %zu edges:", best.count);
+
+      for (size_t i = 0; i < best.count; i++) {
+        fprintf(stderr, " %d-%d", best.edges[i].from, best.edges[i].to);
+      }
+      fprintf(stderr, "\n");
     }
 
     if (sem_post(sem_mutex) == -1) {
@@ -185,7 +194,8 @@ int main(int argc, char **argv) {
     }
 
     if (sem_post(sem_free) == -1) {
-      fprintf(stderr, "%s: sem_post free slots: %s\n", argv[0], strerror(errno));
+      fprintf(stderr, "%s: sem_post free slots: %s\n", argv[0],
+              strerror(errno));
       goto cleanup;
     }
   }
@@ -216,11 +226,13 @@ cleanup:
     result = EXIT_FAILURE;
   }
   if (free_created && sem_unlink(SEM_FREE) == -1) {
-    fprintf(stderr, "%s: sem_unlink free slots: %s\n", argv[0], strerror(errno));
+    fprintf(stderr, "%s: sem_unlink free slots: %s\n", argv[0],
+            strerror(errno));
     result = EXIT_FAILURE;
   }
   if (used_created && sem_unlink(SEM_USED) == -1) {
-    fprintf(stderr, "%s: sem_unlink used slots: %s\n", argv[0], strerror(errno));
+    fprintf(stderr, "%s: sem_unlink used slots: %s\n", argv[0],
+            strerror(errno));
     result = EXIT_FAILURE;
   }
   if (shared_buffer != MAP_FAILED &&

@@ -59,10 +59,6 @@ static void shuffle(VertexArray *vertices);
 
 static bool calculate_fas(const Graph *graph, EdgeArray *fas_edges);
 
-/** @brief Print a system error with the program name and operation.
- * @param program The program name from argv[0].
- * @param operation The operation that failed.
- */
 /** @brief build the graph and generate feedback arc sets
  * @param argc number of command-line arguments
  * @param argv the command-line arguments
@@ -195,9 +191,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%s: sem_post mutex after stop check: %s\n", argv[0],
                 strerror(errno));
         if (sem_post(sem_free) == -1) {
-          fprintf(stderr,
-                  "%s: sem_post free slots after stop check: %s\n", argv[0],
-                  strerror(errno));
+          fprintf(stderr, "%s: sem_post free slots after stop check: %s\n",
+                  argv[0], strerror(errno));
         }
         goto cleanup;
       }
