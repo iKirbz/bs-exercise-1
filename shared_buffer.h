@@ -69,9 +69,10 @@ BufferOperationResult shared_buffer_write(const char *program,
  * @param program program name for error message
  * @param buffer shared circular buffer
  * @param mutex semaphore protecting shared buffer state
+ * @param free_slots semaphore used to wake blocked writers
  * @return true when stop flag was set otherwise false
  */
 bool shared_buffer_request_stop(const char *program, SharedBuffer *buffer,
-                                sem_t *mutex);
+                                sem_t *mutex, sem_t *free_slots);
 
 #endif

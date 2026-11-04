@@ -96,7 +96,7 @@ BufferOperationResult shared_buffer_write(const char *program,
 }
 
 bool shared_buffer_request_stop(const char *program, SharedBuffer *buffer,
-                                sem_t *mutex) {
+                                sem_t *mutex, sem_t *free_slots) {
   if (sem_wait(mutex) == -1) {
     fprintf(stderr, "%s: sem_wait mutex while setting stop flag: %s\n", program,
             strerror(errno));
@@ -106,6 +106,12 @@ bool shared_buffer_request_stop(const char *program, SharedBuffer *buffer,
   if (sem_post(mutex) == -1) {
     fprintf(stderr, "%s: sem_post mutex after setting stop flag: %s\n", program,
             strerror(errno));
+    return false;
+  }
+  // wake a generator writing thats blocked on a full buffer
+  if (sem_post(free_slots) == -1) {
+    fprintf(stderr, "%s: sem_post free slots while requesting stop: %s\n",
+            program, strerror(errno));
     return false;
   }
   return true;

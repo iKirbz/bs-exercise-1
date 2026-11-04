@@ -240,7 +240,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (!shared_buffer_request_stop(argv[0], shared_buffer, sem_mutex)) {
+  if (!shared_buffer_request_stop(argv[0], shared_buffer, sem_mutex,
+                                  sem_free)) {
     goto cleanup;
   }
   if (graph_acyclic) {
