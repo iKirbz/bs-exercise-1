@@ -211,7 +211,8 @@ int main(int argc, char **argv) {
   bool graph_acyclic = false;
   long solutions_read = 0;
 
-  while (!stop_requested && !graph_acyclic) {
+  while (!stop_requested && !graph_acyclic &&
+         (solution_limit < 0 || solutions_read < solution_limit)) {
     Solution temp = {0};
     BufferReadResult read_result = shared_buffer_read(
         argv[0], shared_buffer, sem_mutex, sem_free, sem_used, &temp);
@@ -236,9 +237,6 @@ int main(int argc, char **argv) {
     }
     if (temp.count == 0) {
       graph_acyclic = true;
-    }
-    if (solution_limit >= 0 && solutions_read > solution_limit) {
-      break;
     }
   }
 
