@@ -9,6 +9,7 @@
 #include "shared_buffer.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <semaphore.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -19,7 +20,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-static void print_solution(const Solution *solution);
+static bool print_solution(FILE *stream, const Solution *solution);
 
 static volatile sig_atomic_t stop_requested = 0;
 
@@ -47,11 +48,10 @@ int main(int argc, char **argv) {
   bool mutex_created = false;
   bool free_created = false;
   bool used_created = false;
+  FILE *outfile = NULL;
 
-  bool h_arg = false;
   char *o_arg = NULL;
-  char *n_arg = NULL;
-  char *w_arg = NULL;
+  long solution_limit = -1;
   long delay = 0; // delay in seconds
 
   int c;
@@ -73,33 +73,61 @@ int main(int argc, char **argv) {
    *  argument parsing
    ***********************************************/
 
+  opterr = 0;
   while ((c = getopt(argc, argv, "ho:n:w:")) != -1) {
     switch (c) {
     case 'h':
-      h_arg = true;
-      printf("h is given\n");
-      break;
+      printf("Usage: %s [-h] [-o outfile] [-n limit] [-w delay]\n", argv[0]);
+      return EXIT_SUCCESS;
     case 'o':
       o_arg = optarg;
-      printf("o is given with arg %s\n", o_arg);
       break;
-    case 'n':
-      n_arg = optarg;
-      printf("n is given with arg %s\n", n_arg);
-      break;
-    case 'w':
-      w_arg = optarg;
+    case 'n': {
       char *end;
-      delay = strtol(w_arg, &end, 10);
-      printf("w is given with arg %s\n", w_arg);
-      break;
+      long parsed_limit;
+      errno = 0;
+      parsed_limit = strtol(optarg, &end, 10);
+      if (optarg[0] == '\0' || *end != '\0' || errno == ERANGE ||
+          parsed_limit < 0) {
+        fprintf(stderr, "%s: invalid solution limit: %s\n", argv[0], optarg);
+        fprintf(stderr, "Usage: %s [-h] [-o outfile] [-n limit] [-w delay]\n",
+                argv[0]);
+        return EXIT_FAILURE;
+      }
+      solution_limit = parsed_limit;
+    } break;
+    case 'w': {
+      char *end;
+      errno = 0;
+      delay = strtol(optarg, &end, 10);
+      if (optarg[0] == '\0' || *end != '\0' || errno == ERANGE || delay < 0 ||
+          (unsigned long)delay > UINT_MAX) {
+        fprintf(stderr, "%s: invalid delay: %s\n", argv[0], optarg);
+        fprintf(stderr, "Usage: %s [-h] [-o outfile] [-n limit] [-w delay]\n",
+                argv[0]);
+        return EXIT_FAILURE;
+      }
+    } break;
     case '?': /* invalid option */
-      fprintf(stderr,
-              "usage: supervisor [-h] [-o outfile] [-n limit] [-w delay]");
-      return EXIT_SUCCESS;
-      break;
+      fprintf(stderr, "Usage: %s [-h] [-o outfile] [-n limit] [-w delay]\n",
+              argv[0]);
+      return EXIT_FAILURE;
     default: /* should not occur */
       break;
+    }
+  }
+
+  if (optind != argc) {
+    fprintf(stderr, "Usage: %s [-h] [-o outfile] [-n limit] [-w delay]\n",
+            argv[0]);
+    return EXIT_FAILURE;
+  }
+
+  if (o_arg != NULL) {
+    outfile = fopen(o_arg, "w");
+    if (outfile == NULL) {
+      fprintf(stderr, "%s: fopen output file: %s\n", argv[0], strerror(errno));
+      goto cleanup;
     }
   }
 
@@ -179,9 +207,9 @@ int main(int argc, char **argv) {
   /*******************************************
    *  ready for work
    ***********************************************/
-  Solution best = {0};
-  bool have_best = false;
+  Solution best = {.count = SIZE_MAX};
   bool graph_acyclic = false;
+  long solutions_read = 0;
 
   while (!stop_requested && !graph_acyclic) {
     Solution temp = {0};
@@ -192,14 +220,21 @@ int main(int argc, char **argv) {
       }
       goto cleanup;
     }
+    solutions_read++;
 
-    if (!have_best || temp.count < best.count) {
+    if (temp.count < best.count) {
       best = temp;
-      have_best = true;
-      print_solution(&best);
+      if (!print_solution(stderr, &best) ||
+          (outfile != NULL && !print_solution(outfile, &best))) {
+        fprintf(stderr, "%s: writing solution output failed\n", argv[0]);
+        goto cleanup;
+      }
     }
     if (temp.count == 0) {
       graph_acyclic = true;
+    }
+    if (solution_limit >= 0 && solutions_read > solution_limit) {
+      break;
     }
   }
 
@@ -208,9 +243,24 @@ int main(int argc, char **argv) {
   }
   if (graph_acyclic) {
     printf("The graph is acyclic!\n");
-  } else if (have_best) {
+    if (outfile != NULL) {
+      if (fprintf(outfile, "The graph is acyclic!\n") < 0) {
+        fprintf(stderr, "%s: writing output file failed\n", argv[0]);
+        goto cleanup;
+      }
+    }
+  } else if (best.count != SIZE_MAX) {
     printf("The graph might not be acyclic, best solution removes %zu edges.\n",
            best.count);
+    if (outfile != NULL) {
+      if (fprintf(outfile,
+                  "The graph might not be acyclic, best solution removes %zu "
+                  "edges.\n",
+                  best.count) < 0) {
+        fprintf(stderr, "%s: writing output file failed\n", argv[0]);
+        goto cleanup;
+      }
+    }
   }
   result = EXIT_SUCCESS;
 
@@ -262,16 +312,27 @@ cleanup:
             strerror(errno));
     result = EXIT_FAILURE;
   }
+  if (outfile != NULL && fclose(outfile) == EOF) {
+    fprintf(stderr, "%s: fclose output file: %s\n", argv[0], strerror(errno));
+    result = EXIT_FAILURE;
+  }
   return result;
 }
 
 /** @brief print feedback arc set in assignment format
+ * @param stream output stream
  * @param solution solution to print
+ * @return true when output succeeded otherwise false
  */
-static void print_solution(const Solution *solution) {
-  fprintf(stderr, "Solution with %zu edges:", solution->count);
-  for (size_t i = 0; i < solution->count; i++) {
-    fprintf(stderr, " %d-%d", solution->edges[i].from, solution->edges[i].to);
+static bool print_solution(FILE *stream, const Solution *solution) {
+  if (fprintf(stream, "Solution with %zu edges:", solution->count) < 0) {
+    return false;
   }
-  fprintf(stderr, "\n");
+  for (size_t i = 0; i < solution->count; i++) {
+    if (fprintf(stream, " %d-%d", solution->edges[i].from,
+                solution->edges[i].to) < 0) {
+      return false;
+    }
+  }
+  return fprintf(stream, "\n") >= 0;
 }
