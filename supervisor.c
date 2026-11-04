@@ -19,17 +19,13 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-static bool read_solution(const char *program, SharedBuffer *shared_buffer,
-                          sem_t *sem_mutex, sem_t *sem_free, sem_t *sem_used,
-                          Solution *solution);
-
-static bool request_stop(const char *program, SharedBuffer *shared_buffer,
-                         sem_t *sem_mutex);
-
 static void print_solution(const Solution *solution);
 
 static volatile sig_atomic_t stop_requested = 0;
 
+/** @brief set stop flag when a signal arrives
+ * @param signal_number received signal number
+ */
 static void handle_signal(int signal_number) {
   (void)signal_number;
   stop_requested = 1;
@@ -189,8 +185,8 @@ int main(int argc, char **argv) {
 
   while (!stop_requested && !graph_acyclic) {
     Solution temp = {0};
-    if (!read_solution(argv[0], shared_buffer, sem_mutex, sem_free, sem_used,
-                       &temp)) {
+    if (!shared_buffer_read(argv[0], shared_buffer, sem_mutex, sem_free,
+                            sem_used, &temp)) {
       if (stop_requested) {
         break;
       }
@@ -207,7 +203,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (!request_stop(argv[0], shared_buffer, sem_mutex)) {
+  if (!shared_buffer_request_stop(argv[0], shared_buffer, sem_mutex)) {
     goto cleanup;
   }
   if (graph_acyclic) {
@@ -267,80 +263,6 @@ cleanup:
     result = EXIT_FAILURE;
   }
   return result;
-}
-
-/** @brief read next solution from shared buffer
- * @param program program name for error message
- * @param shared_buffer shared circular buffer
- * @param sem_mutex semaphore for buffer index and slots
- * @param sem_free semaphore with free slots
- * @param sem_used semaphore with used slots
- * @param solution gets solution from buffer
- * @return true when a solution was read otherwise false
- */
-static bool read_solution(const char *program, SharedBuffer *shared_buffer,
-                          sem_t *sem_mutex, sem_t *sem_free, sem_t *sem_used,
-                          Solution *solution) {
-  if (sem_wait(sem_used) == -1) {
-    if (errno == EINTR && stop_requested) {
-      return false;
-    }
-    fprintf(stderr, "%s: sem_wait used slots: %s\n", program, strerror(errno));
-    return false;
-  }
-  if (sem_wait(sem_mutex) == -1) {
-    bool interrupted = errno == EINTR && stop_requested;
-    if (interrupted) {
-      if (sem_post(sem_used) == -1) {
-        fprintf(stderr,
-                "%s: sem_post used slots after interrupted mutex wait: %s\n",
-                program, strerror(errno));
-      }
-      return false;
-    }
-    fprintf(stderr, "%s: sem_wait mutex: %s\n", program, strerror(errno));
-    if (sem_post(sem_used) == -1) {
-      fprintf(stderr, "%s: sem_post used slots after mutex wait failure: %s\n",
-              program, strerror(errno));
-    }
-    return false;
-  }
-
-  *solution = shared_buffer->slots[shared_buffer->read_pos];
-  shared_buffer->read_pos =
-      (shared_buffer->read_pos + 1) % BUFFER_SOLUTION_CAPACITY;
-
-  if (sem_post(sem_mutex) == -1) {
-    fprintf(stderr, "%s: sem_post mutex: %s\n", program, strerror(errno));
-    return false;
-  }
-  if (sem_post(sem_free) == -1) {
-    fprintf(stderr, "%s: sem_post free slots: %s\n", program, strerror(errno));
-    return false;
-  }
-  return true;
-}
-
-/** @brief set stop flag while holding mutex
- * @param program program name for error message
- * @param shared_buffer shared circular buffer
- * @param sem_mutex semaphore for shared buffer
- * @return true when stop flag was set otherwise false
- */
-static bool request_stop(const char *program, SharedBuffer *shared_buffer,
-                         sem_t *sem_mutex) {
-  if (sem_wait(sem_mutex) == -1) {
-    fprintf(stderr, "%s: sem_wait mutex while setting stop flag: %s\n", program,
-            strerror(errno));
-    return false;
-  }
-  shared_buffer->stop = true;
-  if (sem_post(sem_mutex) == -1) {
-    fprintf(stderr, "%s: sem_post mutex after setting stop flag: %s\n", program,
-            strerror(errno));
-    return false;
-  }
-  return true;
 }
 
 /** @brief print feedback arc set in assignment format

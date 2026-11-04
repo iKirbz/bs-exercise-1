@@ -14,16 +14,17 @@ endif
 .PHONY: all clean
 all: generator supervisor
 
-generator: generator.o
+generator: generator.o shared_buffer.o
 	$(CC) -o $@ $^
 
-supervisor: supervisor.o
+supervisor: supervisor.o shared_buffer.o
 	$(CC) -o $@ $^
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 generator.o: generator.c generator.h shared_buffer.h
+shared_buffer.o: shared_buffer.c shared_buffer.h generator.h
 supervisor.o: supervisor.c shared_buffer.h generator.h
 
 clean:
