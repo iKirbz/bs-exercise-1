@@ -141,7 +141,17 @@ int main(int argc, char **argv) {
   while (true) {
 
     if (best.count == 0) {
+      if (sem_wait(sem_mutex) == -1) {
+        fprintf(stderr, "%s: sem_wait mutex while setting stop flag: %s\n",
+                argv[0], strerror(errno));
+        goto cleanup;
+      }
       shared_buffer->stop = true;
+      if (sem_post(sem_mutex) == -1) {
+        fprintf(stderr, "%s: sem_post mutex after setting stop flag: %s\n",
+                argv[0], strerror(errno));
+        goto cleanup;
+      }
       printf("graph is acyclic");
       break;
     }

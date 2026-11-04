@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
 
   srand((unsigned)time(NULL));
 
-  while (!shared_buffer->stop) {
+  while (true) {
 
     shuffle(&graph.vertices);
 
@@ -188,6 +188,25 @@ int main(int argc, char **argv) {
                 argv[0], strerror(errno));
       }
       goto cleanup;
+    }
+
+    if (shared_buffer->stop) {
+      if (sem_post(sem_mutex) == -1) {
+        fprintf(stderr, "%s: sem_post mutex after stop check: %s\n", argv[0],
+                strerror(errno));
+        if (sem_post(sem_free) == -1) {
+          fprintf(stderr,
+                  "%s: sem_post free slots after stop check: %s\n", argv[0],
+                  strerror(errno));
+        }
+        goto cleanup;
+      }
+      if (sem_post(sem_free) == -1) {
+        fprintf(stderr, "%s: sem_post free slots after stop check: %s\n",
+                argv[0], strerror(errno));
+        goto cleanup;
+      }
+      break;
     }
 
     shared_buffer->slots[shared_buffer->write_pos] = s;
