@@ -185,7 +185,7 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    Solution s = {0};
+    Solution s = {.count = 0};
     s.count = fas_edges.count;
 
     for (size_t i = 0; i < s.count; i++) {
@@ -210,8 +210,6 @@ int main(int argc, char **argv) {
 cleanup:
   free(graph.vertices.data);
   free(graph.edges.data);
-  graph = (Graph){0};
-
   free(fas_edges.data);
 
   if (shared_buffer != MAP_FAILED &&
