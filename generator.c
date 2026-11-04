@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
    *  shared memory
    ***********************************************/
 
-  shmfd = shm_open(SHARED_BUFFER_NAME, O_RDWR);
+  shmfd = shm_open(SHARED_BUFFER_NAME, O_RDWR, 0);
   if (shmfd == -1) {
     fprintf(stderr, "%s: shm_open shared memory: %s\n", argv[0],
             strerror(errno));
