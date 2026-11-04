@@ -20,8 +20,8 @@ supervisor: supervisor.o
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# generator.o: generator.c generator.h
-# supervisor.o: supervisor.c supervisor.h
+generator.o: generator.c generator.h
+supervisor.o: supervisor.c shared_buffer.h generator.h
 
 clean:
 	rm -f *.o generator supervisor

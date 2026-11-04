@@ -7,22 +7,23 @@
  * @date 2026-10-27
  */
 
+#include "generator.h"
+#include "shared_buffer.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
+#include <semaphore.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include <time.h>
+#include <unistd.h>
 
 #define INITIAL_VERTEX_CAPACITY 1
 #define INITIAL_EDGE_CAPACITY 1
 #define INITIAL_FAS_EDGE_CAPACITY 1
-
-typedef struct {
-  int from;
-  int to;
-} Edge;
 
 typedef struct {
   int *data;
@@ -63,7 +64,13 @@ static bool calculate_fas(const Graph *graph, EdgeArray *fas_edges);
  * @return EXIT_SUCCESS if it worked otherwise EXIT_FAILURE
  */
 int main(int argc, char **argv) {
+  int shmfd = -1;
+  SharedBuffer *shared_buffer = MAP_FAILED;
+  sem_t *sem_mutex = SEM_FAILED;
+  sem_t *sem_free = SEM_FAILED;
+  sem_t *sem_used = SEM_FAILED;
   int result = EXIT_FAILURE;
+
   Graph graph = {
       {NULL, 0, INITIAL_VERTEX_CAPACITY},
       {NULL, 0, INITIAL_EDGE_CAPACITY},
@@ -75,27 +82,119 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
 
-  /* shuffle vertices */
-  srand((unsigned)time(NULL));
-  shuffle(&graph.vertices);
+  /*******************************************
+   *  shared memory
+   ***********************************************/
 
-#ifdef DEBUG
-  printf("Shuffled vertices:");
-  for (size_t i = 0; i < graph.vertices.count; i++) {
-    printf(" %d", graph.vertices.data[i]);
-  }
-  printf("\n");
-#endif
-
-  /* calculate feedback arc set */
-  if (!calculate_fas(&graph, &fas_edges)) {
-    fprintf(stderr, "%s: could not calculate feedback arc set\n", argv[0]);
+  shmfd = shm_open(SHARED_BUFFER_NAME, O_RDWR);
+  if (shmfd == -1) {
+    fprintf(stderr, "error opening shared memory: \n");
+    perror("shm_open");
     goto cleanup;
   }
 
+  // map shared memory object:
+  shared_buffer = mmap(NULL, sizeof(SharedBuffer), PROT_READ | PROT_WRITE,
+                       MAP_SHARED, shmfd, 0);
+
+  if (shared_buffer == MAP_FAILED) {
+    fprintf(stderr, "error mapping shared memory: \n");
+    goto cleanup;
+  }
+
+  if (close(shmfd) == -1) {
+    perror("close shared memory fd");
+    shmfd = -1;
+    goto cleanup;
+  }
+  shmfd = -1;
+
+  /*******************************************
+   *  sem mutex, free, used
+   ***********************************************/
+
+  sem_mutex = sem_open(SEM_MUTEX, 0);
+  if (sem_mutex == SEM_FAILED) {
+    perror("sem_open mutex");
+    goto cleanup;
+  }
+
+  sem_free = sem_open(SEM_FREE, 0);
+  if (sem_free == SEM_FAILED) {
+    perror("sem_open free");
+    goto cleanup;
+  }
+
+  sem_used = sem_open(SEM_USED, 0);
+  if (sem_used == SEM_FAILED) {
+    perror("sem_open used");
+    goto cleanup;
+  }
+
+  /*******************************************
+   *  ready for work
+   ***********************************************/
+
+  srand((unsigned)time(NULL));
+
+  while (!shared_buffer->stop) {
+
+    shuffle(&graph.vertices);
+
 #ifdef DEBUG
-  printf("FAS contains %zu edges\n", fas_edges.count);
+    printf("Shuffled vertices:");
+    for (size_t i = 0; i < graph.vertices.count; i++) {
+      printf(" %d", graph.vertices.data[i]);
+    }
+    printf("\n");
 #endif
+
+    /* calculate feedback arc set */
+    if (!calculate_fas(&graph, &fas_edges)) {
+      fprintf(stderr, "%s: could not calculate feedback arc set\n", argv[0]);
+      goto cleanup;
+    }
+#ifdef DEBUG
+    printf("FAS contains %zu edges\n", fas_edges.count);
+#endif
+
+    if (fas_edges.count > MAX_FAS_EDGES) {
+      continue;
+    }
+
+    Solution s = {0};
+    s.count = fas_edges.count;
+
+    for (size_t i = 0; i < s.count; i++) {
+      s.edges[i] = fas_edges.data[i];
+    }
+    if (sem_wait(sem_free) == -1) {
+      perror("sem_wait free");
+      goto cleanup;
+    }
+
+    if (sem_wait(sem_mutex) == -1) {
+      perror("sem_wait mutex");
+      if (sem_post(sem_free) == -1) {
+        perror("sem_post free after mutex wait failure");
+      }
+      goto cleanup;
+    }
+
+    shared_buffer->slots[shared_buffer->write_pos] = s;
+    shared_buffer->write_pos =
+        (shared_buffer->write_pos + 1) % BUFFER_SOLUTION_CAPACITY;
+
+    if (sem_post(sem_mutex) == -1) {
+      perror("sem_post mutex");
+      goto cleanup;
+    }
+
+    if (sem_post(sem_used) == -1) {
+      perror("sem_post used");
+      goto cleanup;
+    }
+  }
 
   /* return success and free resources */
   result = EXIT_SUCCESS;
@@ -106,6 +205,24 @@ cleanup:
   graph = (Graph){0};
 
   free(fas_edges.data);
+
+  if (shared_buffer != MAP_FAILED &&
+      munmap(shared_buffer, sizeof *shared_buffer) == -1) {
+    perror("munmap shared memory");
+    result = EXIT_FAILURE;
+  }
+  if (sem_mutex != SEM_FAILED && sem_close(sem_mutex) == -1) {
+    perror("sem_close mutex");
+    result = EXIT_FAILURE;
+  }
+  if (sem_free != SEM_FAILED && sem_close(sem_free) == -1) {
+    perror("sem_close free slots");
+    result = EXIT_FAILURE;
+  }
+  if (sem_used != SEM_FAILED && sem_close(sem_used) == -1) {
+    perror("sem_close used slots");
+    result = EXIT_FAILURE;
+  }
   return result;
 }
 
@@ -292,10 +409,13 @@ static void shuffle(VertexArray *vertices) {
  * @return true if it worked otherwise false
  */
 static bool calculate_fas(const Graph *graph, EdgeArray *fas_edges) {
-  fas_edges->data = malloc(fas_edges->capacity * sizeof *fas_edges->data);
   if (fas_edges->data == NULL) {
-    return false;
+    fas_edges->data = malloc(fas_edges->capacity * sizeof *fas_edges->data);
+    if (fas_edges->data == NULL) {
+      return false;
+    }
   }
+  fas_edges->count = 0;
 
   for (size_t i = 0; i < graph->edges.count; i++) {
     Edge edge = graph->edges.data[i];
