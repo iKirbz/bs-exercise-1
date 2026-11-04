@@ -2,3 +2,6 @@
 /supervisor
 /main
 /*.o
+._*
+.DS_Store
+*.tgz
