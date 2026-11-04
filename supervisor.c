@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
 
   while (!stop_requested && !graph_acyclic &&
          (solution_limit < 0 || solutions_read < solution_limit)) {
-    Solution temp = {0};
+    Solution temp = {.count = 0};
     BufferReadResult read_result = shared_buffer_read(
         argv[0], shared_buffer, sem_mutex, sem_free, sem_used, &temp);
     if (read_result == BUFFER_READ_INTERRUPTED) {
@@ -229,9 +229,8 @@ int main(int argc, char **argv) {
 
     if (temp.count < best.count) {
       best = temp;
-      if (!print_solution(stderr, &best) ||
-          (outfile != NULL && !print_solution(outfile, &best))) {
-        fprintf(stderr, "%s: writing solution output failed\n", argv[0]);
+      if (!print_solution(stderr, &best)) {
+        fprintf(stderr, "%s: writing solution to stderr failed\n", argv[0]);
         goto cleanup;
       }
     }
