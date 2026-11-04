@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <semaphore.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -27,6 +28,18 @@ static bool request_stop(const char *program, SharedBuffer *shared_buffer,
 
 static void print_solution(const Solution *solution);
 
+static volatile sig_atomic_t stop_requested = 0;
+
+static void handle_signal(int signal_number) {
+  (void)signal_number;
+  stop_requested = 1;
+}
+
+/** @brief run the supervisor
+ * @param argc number of command line arguments
+ * @param argv command line arguments
+ * @return EXIT_SUCCESS when supervision ends normally otherwise EXIT_FAILURE
+ */
 int main(int argc, char **argv) {
   int result = EXIT_FAILURE;
   int shmfd = -1;
@@ -46,6 +59,23 @@ int main(int argc, char **argv) {
   long delay = 0; // delay in seconds
 
   int c;
+
+  /*******************************************
+   *  signal handler setup
+   ***********************************************/
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = handle_signal;
+  sigemptyset(&sa.sa_mask);
+  if (sigaction(SIGINT, &sa, NULL) == -1 ||
+      sigaction(SIGTERM, &sa, NULL) == -1) {
+    fprintf(stderr, "%s: sigaction: %s\n", argv[0], strerror(errno));
+    return EXIT_FAILURE;
+  }
+
+  /*******************************************
+   *  argument parsing
+   ***********************************************/
 
   while ((c = getopt(argc, argv, "ho:n:w:")) != -1) {
     switch (c) {
@@ -153,30 +183,39 @@ int main(int argc, char **argv) {
   /*******************************************
    *  ready for work
    ***********************************************/
-  Solution best = {.count = SIZE_MAX};
+  Solution best = {0};
+  bool have_best = false;
+  bool graph_acyclic = false;
 
-  while (true) {
-
-    if (best.count == 0) {
-      if (!request_stop(argv[0], shared_buffer, sem_mutex)) {
-        goto cleanup;
-      }
-      printf("The graph is acyclic!\n");
-      break;
-    }
-
+  while (!stop_requested && !graph_acyclic) {
     Solution temp = {0};
     if (!read_solution(argv[0], shared_buffer, sem_mutex, sem_free, sem_used,
                        &temp)) {
+      if (stop_requested) {
+        break;
+      }
       goto cleanup;
     }
 
-    if (temp.count < best.count) {
+    if (!have_best || temp.count < best.count) {
       best = temp;
+      have_best = true;
       print_solution(&best);
+    }
+    if (temp.count == 0) {
+      graph_acyclic = true;
     }
   }
 
+  if (!request_stop(argv[0], shared_buffer, sem_mutex)) {
+    goto cleanup;
+  }
+  if (graph_acyclic) {
+    printf("The graph is acyclic!\n");
+  } else if (have_best) {
+    printf("The graph might not be acyclic, best solution removes %zu edges.\n",
+           best.count);
+  }
   result = EXIT_SUCCESS;
 
   /*******************************************
@@ -243,10 +282,22 @@ static bool read_solution(const char *program, SharedBuffer *shared_buffer,
                           sem_t *sem_mutex, sem_t *sem_free, sem_t *sem_used,
                           Solution *solution) {
   if (sem_wait(sem_used) == -1) {
+    if (errno == EINTR && stop_requested) {
+      return false;
+    }
     fprintf(stderr, "%s: sem_wait used slots: %s\n", program, strerror(errno));
     return false;
   }
   if (sem_wait(sem_mutex) == -1) {
+    bool interrupted = errno == EINTR && stop_requested;
+    if (interrupted) {
+      if (sem_post(sem_used) == -1) {
+        fprintf(stderr,
+                "%s: sem_post used slots after interrupted mutex wait: %s\n",
+                program, strerror(errno));
+      }
+      return false;
+    }
     fprintf(stderr, "%s: sem_wait mutex: %s\n", program, strerror(errno));
     if (sem_post(sem_used) == -1) {
       fprintf(stderr, "%s: sem_post used slots after mutex wait failure: %s\n",
