@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -58,6 +59,10 @@ static void shuffle(VertexArray *vertices);
 
 static bool calculate_fas(const Graph *graph, EdgeArray *fas_edges);
 
+/** @brief Print a system error with the program name and operation.
+ * @param program The program name from argv[0].
+ * @param operation The operation that failed.
+ */
 /** @brief build the graph and generate feedback arc sets
  * @param argc number of command-line arguments
  * @param argv the command-line arguments
@@ -88,8 +93,8 @@ int main(int argc, char **argv) {
 
   shmfd = shm_open(SHARED_BUFFER_NAME, O_RDWR);
   if (shmfd == -1) {
-    fprintf(stderr, "error opening shared memory: \n");
-    perror("shm_open");
+    fprintf(stderr, "%s: shm_open shared memory: %s\n", argv[0],
+            strerror(errno));
     goto cleanup;
   }
 
@@ -98,12 +103,13 @@ int main(int argc, char **argv) {
                        MAP_SHARED, shmfd, 0);
 
   if (shared_buffer == MAP_FAILED) {
-    fprintf(stderr, "error mapping shared memory: \n");
+    fprintf(stderr, "%s: mmap shared memory: %s\n", argv[0], strerror(errno));
     goto cleanup;
   }
 
   if (close(shmfd) == -1) {
-    perror("close shared memory fd");
+    fprintf(stderr, "%s: close shared memory descriptor: %s\n", argv[0],
+            strerror(errno));
     shmfd = -1;
     goto cleanup;
   }
@@ -115,19 +121,19 @@ int main(int argc, char **argv) {
 
   sem_mutex = sem_open(SEM_MUTEX, 0);
   if (sem_mutex == SEM_FAILED) {
-    perror("sem_open mutex");
+    fprintf(stderr, "%s: sem_open mutex: %s\n", argv[0], strerror(errno));
     goto cleanup;
   }
 
   sem_free = sem_open(SEM_FREE, 0);
   if (sem_free == SEM_FAILED) {
-    perror("sem_open free");
+    fprintf(stderr, "%s: sem_open free slots: %s\n", argv[0], strerror(errno));
     goto cleanup;
   }
 
   sem_used = sem_open(SEM_USED, 0);
   if (sem_used == SEM_FAILED) {
-    perror("sem_open used");
+    fprintf(stderr, "%s: sem_open used slots: %s\n", argv[0], strerror(errno));
     goto cleanup;
   }
 
@@ -169,14 +175,17 @@ int main(int argc, char **argv) {
       s.edges[i] = fas_edges.data[i];
     }
     if (sem_wait(sem_free) == -1) {
-      perror("sem_wait free");
+      fprintf(stderr, "%s: sem_wait free slots: %s\n", argv[0],
+              strerror(errno));
       goto cleanup;
     }
 
     if (sem_wait(sem_mutex) == -1) {
-      perror("sem_wait mutex");
+      fprintf(stderr, "%s: sem_wait mutex: %s\n", argv[0], strerror(errno));
       if (sem_post(sem_free) == -1) {
-        perror("sem_post free after mutex wait failure");
+        fprintf(stderr,
+                "%s: sem_post free slots after mutex wait failure: %s\n",
+                argv[0], strerror(errno));
       }
       goto cleanup;
     }
@@ -186,12 +195,13 @@ int main(int argc, char **argv) {
         (shared_buffer->write_pos + 1) % BUFFER_SOLUTION_CAPACITY;
 
     if (sem_post(sem_mutex) == -1) {
-      perror("sem_post mutex");
+      fprintf(stderr, "%s: sem_post mutex: %s\n", argv[0], strerror(errno));
       goto cleanup;
     }
 
     if (sem_post(sem_used) == -1) {
-      perror("sem_post used");
+      fprintf(stderr, "%s: sem_post used slots: %s\n", argv[0],
+              strerror(errno));
       goto cleanup;
     }
   }
@@ -208,19 +218,21 @@ cleanup:
 
   if (shared_buffer != MAP_FAILED &&
       munmap(shared_buffer, sizeof *shared_buffer) == -1) {
-    perror("munmap shared memory");
+    fprintf(stderr, "%s: munmap shared memory: %s\n", argv[0], strerror(errno));
     result = EXIT_FAILURE;
   }
   if (sem_mutex != SEM_FAILED && sem_close(sem_mutex) == -1) {
-    perror("sem_close mutex");
+    fprintf(stderr, "%s: sem_close mutex: %s\n", argv[0], strerror(errno));
     result = EXIT_FAILURE;
   }
   if (sem_free != SEM_FAILED && sem_close(sem_free) == -1) {
-    perror("sem_close free slots");
+    fprintf(stderr, "%s: sem_close free slots semaphore: %s\n", argv[0],
+            strerror(errno));
     result = EXIT_FAILURE;
   }
   if (sem_used != SEM_FAILED && sem_close(sem_used) == -1) {
-    perror("sem_close used slots");
+    fprintf(stderr, "%s: sem_close used slots semaphore: %s\n", argv[0],
+            strerror(errno));
     result = EXIT_FAILURE;
   }
   return result;

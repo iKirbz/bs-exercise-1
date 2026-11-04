@@ -1,10 +1,12 @@
 #include "shared_buffer.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <semaphore.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -63,8 +65,8 @@ int main(int argc, char **argv) {
    ***********************************************/
   shmfd = shm_open(SHARED_BUFFER_NAME, O_RDWR | O_EXCL | O_CREAT, 0600);
   if (shmfd == -1) {
-    fprintf(stderr, "error creating shared memory: \n");
-    perror("shm_open");
+    fprintf(stderr, "%s: shm_open shared memory: %s\n", argv[0],
+            strerror(errno));
     goto cleanup;
   }
 
@@ -72,7 +74,8 @@ int main(int argc, char **argv) {
 
   // set the size of the shared memory:
   if (ftruncate(shmfd, (off_t)sizeof(SharedBuffer)) == -1) {
-    perror("ftruncate");
+    fprintf(stderr, "%s: ftruncate shared memory: %s\n", argv[0],
+            strerror(errno));
     goto cleanup;
   }
 
@@ -81,14 +84,15 @@ int main(int argc, char **argv) {
                        MAP_SHARED, shmfd, 0);
 
   if (shared_buffer == MAP_FAILED) {
-    fprintf(stderr, "error mapping shared memory: \n");
+    fprintf(stderr, "%s: mmap shared memory: %s\n", argv[0], strerror(errno));
     goto cleanup;
   }
 
   *shared_buffer = (SharedBuffer){0};
 
   if (close(shmfd) == -1) {
-    perror("close shared memory fd");
+    fprintf(stderr, "%s: close shared memory descriptor: %s\n", argv[0],
+            strerror(errno));
     shmfd = -1;
     goto cleanup;
   }
@@ -100,7 +104,7 @@ int main(int argc, char **argv) {
 
   sem_mutex = sem_open(SEM_MUTEX, O_CREAT | O_EXCL, 0600, 1);
   if (sem_mutex == SEM_FAILED) {
-    perror("sem_open mutex");
+    fprintf(stderr, "%s: sem_open mutex: %s\n", argv[0], strerror(errno));
     goto cleanup;
   }
   mutex_created = true;
@@ -112,7 +116,7 @@ int main(int argc, char **argv) {
   sem_free =
       sem_open(SEM_FREE, O_CREAT | O_EXCL, 0600, BUFFER_SOLUTION_CAPACITY);
   if (sem_free == SEM_FAILED) {
-    perror("sem_open free slots");
+    fprintf(stderr, "%s: sem_open free slots: %s\n", argv[0], strerror(errno));
     goto cleanup;
   }
   free_created = true;
@@ -122,7 +126,7 @@ int main(int argc, char **argv) {
    ***********************************************/
   sem_used = sem_open(SEM_USED, O_CREAT | O_EXCL, 0600, 0);
   if (sem_used == SEM_FAILED) {
-    perror("sem_open used slots");
+    fprintf(stderr, "%s: sem_open used slots: %s\n", argv[0], strerror(errno));
     goto cleanup;
   }
   used_created = true;
@@ -143,14 +147,15 @@ int main(int argc, char **argv) {
     }
 
     if (sem_wait(sem_used) == -1) {
-      perror("sem_wait used");
+      fprintf(stderr, "%s: sem_wait used slots: %s\n", argv[0], strerror(errno));
       goto cleanup;
     }
 
     if (sem_wait(sem_mutex) == -1) {
-      perror("sem_wait mutex");
+      fprintf(stderr, "%s: sem_wait mutex: %s\n", argv[0], strerror(errno));
       if (sem_post(sem_used) == -1) {
-        perror("sem_post used after mutex wait failure");
+        fprintf(stderr, "%s: sem_post used slots after mutex wait failure: %s\n",
+                argv[0], strerror(errno));
       }
       goto cleanup;
     }
@@ -165,12 +170,12 @@ int main(int argc, char **argv) {
     }
 
     if (sem_post(sem_mutex) == -1) {
-      perror("sem_post mutex");
+      fprintf(stderr, "%s: sem_post mutex: %s\n", argv[0], strerror(errno));
       goto cleanup;
     }
 
     if (sem_post(sem_free) == -1) {
-      perror("sem_post free");
+      fprintf(stderr, "%s: sem_post free slots: %s\n", argv[0], strerror(errno));
       goto cleanup;
     }
   }
@@ -183,40 +188,44 @@ int main(int argc, char **argv) {
 
 cleanup:
   if (sem_mutex != SEM_FAILED && sem_close(sem_mutex) == -1) {
-    perror("sem_close mutex");
+    fprintf(stderr, "%s: sem_close mutex: %s\n", argv[0], strerror(errno));
     result = EXIT_FAILURE;
   }
   if (sem_free != SEM_FAILED && sem_close(sem_free) == -1) {
-    perror("sem_close free slots");
+    fprintf(stderr, "%s: sem_close free slots semaphore: %s\n", argv[0],
+            strerror(errno));
     result = EXIT_FAILURE;
   }
   if (sem_used != SEM_FAILED && sem_close(sem_used) == -1) {
-    perror("sem_close used slots");
+    fprintf(stderr, "%s: sem_close used slots semaphore: %s\n", argv[0],
+            strerror(errno));
     result = EXIT_FAILURE;
   }
   if (mutex_created && sem_unlink(SEM_MUTEX) == -1) {
-    perror("sem_unlink mutex");
+    fprintf(stderr, "%s: sem_unlink mutex: %s\n", argv[0], strerror(errno));
     result = EXIT_FAILURE;
   }
   if (free_created && sem_unlink(SEM_FREE) == -1) {
-    perror("sem_unlink free slots");
+    fprintf(stderr, "%s: sem_unlink free slots: %s\n", argv[0], strerror(errno));
     result = EXIT_FAILURE;
   }
   if (used_created && sem_unlink(SEM_USED) == -1) {
-    perror("sem_unlink used slots");
+    fprintf(stderr, "%s: sem_unlink used slots: %s\n", argv[0], strerror(errno));
     result = EXIT_FAILURE;
   }
   if (shared_buffer != MAP_FAILED &&
       munmap(shared_buffer, sizeof *shared_buffer) == -1) {
-    perror("munmap shared memory");
+    fprintf(stderr, "%s: munmap shared memory: %s\n", argv[0], strerror(errno));
     result = EXIT_FAILURE;
   }
   if (shmfd != -1 && close(shmfd) == -1) {
-    perror("close shared memory descriptor");
+    fprintf(stderr, "%s: close shared memory descriptor: %s\n", argv[0],
+            strerror(errno));
     result = EXIT_FAILURE;
   }
   if (shm_created && shm_unlink(SHARED_BUFFER_NAME) == -1) {
-    perror("shm_unlink");
+    fprintf(stderr, "%s: shm_unlink shared memory: %s\n", argv[0],
+            strerror(errno));
     result = EXIT_FAILURE;
   }
   return result;
